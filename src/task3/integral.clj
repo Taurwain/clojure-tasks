@@ -1,4 +1,15 @@
-(ns task3.integral)
+(ns integral
+  "Численное построение функции-интеграла F(x) = в∫0^x f(t) dt методом трапеций.
+
+  Сетка интегрирования (шаг dx) — внутренняя деталь реализации. Итоговая функция F
+  принимает произвольное значение x из области определения и вычисляет приближение
+  интеграла, переиспользуя ранее накопленные значения на сетке там, где это возможно.
+
+  Варианты:
+    naive-integral     — полное пересчитывание каждой суммы при каждом вызове.
+    memoized-integral  — мемоизация накопленных частичных сумм на сетке.
+    lazy-integral      — бесконечная ленивая последовательность частичных сумм."
+  (:require [clojure.test :refer [deftest is testing]]))
 
 (defn- parse-args
   "Раскладывает x = n*dx + r, где 0 <= r < dx. Возвращает [n r]."
@@ -18,7 +29,7 @@
   "Возвращает F(x) = в∫0^x f(t) dt. При каждом вызове вся сумма считается заново."
   [f dx]
   (fn [x]
-    (let [[n r] (parse-args x dx)
+    (let [[n] (parse-args x dx)
           nodes (map (fn [i] (* i dx)) (range 0 (inc n)))]
       (+ (reduce + (map (fn [[a b]] (trap f a b)) (partition 2 1 nodes)))
          (trap f (* n dx) x)))))
@@ -40,7 +51,7 @@
                     (swap! store assoc i v)
                     v)))]
       (fn [x]
-        (let [[n r] (parse-args x dx)]
+        (let [[n] (parse-args x dx)]
           (+ (sum-at n) (trap f (* n dx) x)))))))
 
 ;; ---------------------------------------------------------------------------
@@ -53,46 +64,56 @@
   Состояние шага — [x (f x) sum]. Ленивая реализация кэширует уже вычисленные
   элементы, поэтому повторные запросы не пересчитывают пройденные трапеции."
   [f dx]
-  (let [partials (->> (iterate (fn [[x fx sum]]
+  (let [partials (->> (iterate (fn [[x _ sum]]
                                  (let [nx (+ x dx)
                                        nfx (f nx)]
                                    [nx nfx (+ sum (trap f x nx))]))
                                [0.0 (f 0.0) 0.0])
                       (map (fn [[_ _ sum]] sum)))]
     (fn [x]
-      (let [[n r] (parse-args x dx)]
+      (let [[n] (parse-args x dx)]
         (+ (nth partials n) (trap f (* n dx) x))))))
 
+;; ---------------------------------------------------------------------------
+;; Примеры и проверки (ниже — только тесты, на работу не влияют).
+;; ---------------------------------------------------------------------------
+(defn- max-abs-offgrid
+  "Максимальная абсолютная ошибка |F(x) - exact(x)| на не-сеточных точках области."
+  [F exact dx]
+  (apply max
+         (for [i (range 0 (long (/ 10.0 dx)))]
+           (let [x (* (+ i 0.5) dx)]
+             (Math/abs (- (F x) (exact x)))))))
 
+(defn -test []
+  (clojure.test/run-tests 'integral))
 
-(defn run-examples
-  "Запускает демонстрацию трёх реализаций интеграла."
-  []
-  (let [f (fn [t] (* t t))
-        exact (fn [x] (/ (* x x x) 3.0))
-        dx 0.1
-        points [0.5 1.0 1.25 2.0]
-        implementations
-        [["naive-integral" naive-integral]
-         ["memoized-integral" memoized-integral]
-         ["lazy-integral" lazy-integral]]]
+(deftest all-variants-exact-on-quadratic
+  (testing "все три варианта: для f(t)=3t^2 интеграл равен x^3"
+    (let [f (fn [t] (* 3.0 t t))
+          exact (fn [t] (* t t t))
+          dx 0.01
+          xs [0.0 0.537 0.75 1.0]]
+      (doseq [make [naive-integral memoized-integral lazy-integral]]
+        (let [F (make f dx)]
+          (doseq [x xs]
+            (is (< (Math/abs (- (F x) (exact x))) 1e-3))))))))
 
-    (println "\n=== Численное интегрирование f(t) = t^2 ===")
-    (println "Точный интеграл: F(x) = x^3 / 3")
-    (println "Шаг dx =" dx)
+(deftest memoized-reuses-prefix
+  (testing "мемоизированный вариант переиспользует ранее найденные площади"
+    (let [calls (atom 0)
+          f (fn [t] (swap! calls inc) (* 3.0 t t))
+          F (memoized-integral f 0.01)]
+      (F 2.0)                     ; заполняет сетку до n=200
+      (let [calls-a @calls]
+        (F 0.537)                 ; меньший аргумент — вычисляется только хвост
+        (is (< (- @calls calls-a) 4))))))
 
-    (doseq [[name make-integral] implementations]
-      (let [F (make-integral f dx)]
-        (println "\nРеализация:" name)
-        (doseq [x points]
-          (println
-           (format "x = %.2f | F(x) = %.6f | точное = %.6f | ошибка = %.6f"
-                   (double x)
-                   (double (F x))
-                   (double (exact x))
-                   (Math/abs (- (double (F x))
-                                (double (exact x))))))))
-
-      (println "\n=== Демонстрация завершена ==="))))
-
-(run-examples)
+(deftest second-order-not-degraded
+  (testing "для x вне узлов сетки порядок точности остаётся O(dx^2)"
+    (let [f (fn [t] (* 3.0 t t))
+          exact (fn [t] (* t t t))
+          err (fn [make dx] (max-abs-offgrid (make f dx) exact dx))]
+      (doseq [make [memoized-integral lazy-integral]]
+        ;; при уменьшении dx вдвое ошибка обязана уменьшиться примерно в 4 раза
+        (is (< (err make 0.005) (* 0.35 (err make 0.01))))))))
