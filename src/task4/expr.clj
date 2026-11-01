@@ -1,36 +1,9 @@
-(ns task4.expr)
+(ns task4.expr
+    (:require [task2.task2c :refer [to-clojure-form]]))
+
 
 (def add-op?   '#{+ -})
 (def mult-op?  '#{* /})
-
-
-(defn parse-factor [tokens]
-  [(first tokens) (rest tokens)])
-
-
-(defn parse-term-tail [acc tokens]
-  (if (and tokens (contains? mult-op? (first tokens)))
-    (parse-term-tail (list (first tokens) acc (first (rest tokens)))
-                     (rest (rest tokens)))
-    [acc tokens]))
-
-
-(defn parse-term [tokens]
-  (let [[acc rest] (parse-factor tokens)]
-    (parse-term-tail acc rest)))
-
-
-(defn parse-expr-tail [acc tokens]
-  (if (and tokens (contains? add-op? (first tokens)))
-    (let [[term rest] (parse-term (rest tokens))]
-      (parse-expr-tail (list (first tokens) acc term) rest))
-    [acc tokens]))
-
-
-(defn to-clojure-form
-  [expr]
-  (let [[term tokens] (parse-term expr)]
-    (first (parse-expr-tail term tokens))))
 
 
 (defn eval-expression
